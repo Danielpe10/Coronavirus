@@ -1,0 +1,264 @@
+---
+title: "R Notebook"
+author: "Daniel Peña"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r Loading Libraries, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(deSolve)
+library(tidyverse)
+```
+## DATA
+I downlowaded the date from RamiKrispin's Github https://github.com/RamiKrispin/coronavirus/blob/master/data/coronavirus.rda
+
+```{r Loading Data, include=FALSE}
+load("F:/Escritorio/Bases de datos Daniel/Carper/coronavirus.rda")
+```
+
+## Managing DATA
+In order to be able to use this data for our model, I added all the data points so that we had a number of total cases for each given day. I took out Feb-13, because it added more cases due to new identification tecniques. I am yet to try the model with this info.
+
+```{r Managing Data to fit Model}
+c1 <- coronavirus %>%
+  select(date,type,cases) %>%
+  group_by(date,type) %>%
+  summarise(total_cases = sum(cases)) 
+
+c2 <- c1[which(c1$type=="confirmed" & c1$date != "2020-02-13"	),]
+
+c2$cumtotal_cases <- cumsum(c2$total_cases)   
+
+ggplot(data= c2 ,aes(date,cumtotal_cases, colour = type)) + geom_line()
+```
+
+## Model
+
+I set the population = 50,000,000 which is a good estimate. Also I create a vector Infected which takes in the info from the coronavirus data.
+
+This model is adapted from Learning Machine's post https://blog.ephorie.de/epidemiology-how-contagious-is-novel-coronavirus-2019-ncov 
+
+SIR models the dynamics of the outbreak and uses three differential equations, in order to do so. \Beta is the parameter that controls the transition between Susceptibles and Infected and \Gamma which controls the transition between Infected and Recovered:
+
+```{r Coronavirus in Colombia [Initial Info]}
+pop <-50000000
+
+Infected <- as.integer(c2$cumtotal_cases)
+
+Dia <- 1:length(Infected)
+
+old <- par(mfrow = c(1, 2))
+
+SIR <- function(time, state, parameters) {
+  par <- as.list(c(state, parameters))
+  with(par, {
+    dS <- -beta/pop * I * S
+    dI <- beta/pop * I * S - gamma * I
+    dR <- gamma * I
+    list(c(dS, dI, dR))
+    })
+}
+```
+
+## Sum of Squared Differences 
+
+RSS takes the info given and minimizes the Sum of Squared Differences,  between the number of infected I at time t and the corresponding number of predicted cases by our model \^{I}(t)
+
+\[RSS(\beta, \gamma) = \sum_{t} \left( I(t)-{I}(t) \right)^2\]
+
+```{r Coronavirus in Colombia [Model]}
+init <- c(S = pop-Infected[1], I = Infected[1], R = 0)
+RSS <- function(parameters) {
+  names(parameters) <- c("beta", "gamma")
+  out <- ode(y = init, times = Dia, func = SIR, parms = parameters)
+  fit <- out[ , 3]
+  sum((Infected - fit)^2)
+}
+ 
+Opt <- optim(c(0.5, 0.5), RSS, method = "L-BFGS-B", lower = c(0, 0), upper = c(1, 1)) # optimize with some sensible conditions
+
+Opt_par <- setNames(Opt$par, c("beta", "gamma"))
+Opt_par
+
+t <- 1:100 # time in days
+fit <- data.frame(ode(y = init, times = t, func = SIR, parms = Opt_par))
+
+```
+## Interesting Stats
+
+In learning machine's post R0 is calculated at 2.073224, we have a much lower value at 1.364, this R0 refers to the number of healthy people that get infected per number of infected people. I believe it is much lower because the DATA that I am using here shows a far slower expansion, also maybe the population difference might affect this indicator, although I think it is unlikely.
+
+The height for the pandemic in our model is at day 65 with almost 2 million people infected and a maximum of 40,000 dead. Compared to Learning Machines height at day 50 with over 200 million infected and 4 million dead.
+
+```{r Final Calculations}
+par(old)
+ 
+R0 <- setNames(Opt_par["beta"] / Opt_par["gamma"], "R0")
+
+Height <- fit[fit$I == max(fit$I), "I", drop = FALSE] # height of pandemic
+
+Max_Dead <- max(fit$I) * 0.02 # max deaths with supposed 2% mortality rate
+
+R0
+Height
+Max_Dead
+```
+
+
+## Graphs
+
+I like nice graphs, the code is long, so I will just leave the first one.
+
+```{r Grahps!}
+graph11 <- fit %>% gather(key, value, -time)
+
+bigplot <- ggplot(graph11, mapping = aes(x = time, y = value, color = key) ) +   
+  geom_line(size =1.25)+  
+  scale_color_manual( values = 
+    c("red1", "green3","gray1"))+ 
+  
+  theme(
+    plot.title = element_text(size = 12, face = "bold",hjust = 0.5),
+    plot.caption = element_text(size = 8, face = "italic"),
+    legend.position="top",
+    legend.title = element_blank(),
+    legend.box = "horizontal" ,
+    legend.text=element_text(size=8.5),
+    panel.grid.minor = element_blank(), 
+    panel.grid.major = element_line(color = "gray50", size = 0.5),
+    panel.grid.major.x = element_blank(),
+    panel.background = element_blank(),
+    line = element_blank(),
+    axis.ticks.length = unit(.15, "cm"),
+    axis.ticks.y = element_blank(),
+    axis.title.x = element_text(color="black", 
+    size=12),
+    axis.title.y = element_text(color="black",
+    size=10,
+    face="italic"))+
+  
+  scale_y_continuous(expand = c(0, 0),
+    limits=c(0.0,50000000),
+    breaks=seq(0.0,50000000,10000000), 
+    name = "Number of subjects")+
+  
+  scale_x_continuous(expand = c(0, 0),
+    name = "Days")+
+  
+  labs(title = "SIR Model 2019-nCov Colombia", 
+       caption = "Info taken from RamiKrispin. Adapted model from Learning Machines.")
+
+bigplot
+```
+
+
+```{r Grahps!Graphs!, echo=FALSE}
+plotinf <- ggplot(fit, aes(x=time,y =I)) +   
+  geom_line(size =1.25,color ="red1")+  
+  
+  theme(
+    plot.title = element_text(size = 12, face = "bold",hjust = 0.5),
+    plot.caption = element_text(size = 8, face = "italic"),
+    panel.grid.minor = element_blank(), 
+    panel.grid.major = element_line(color = "gray50", size = 0.5),
+    panel.grid.major.x = element_blank(),
+    panel.background = element_blank(),
+    line = element_blank(),
+    axis.ticks.length = unit(.15, "cm"),
+    axis.ticks.y = element_blank(),
+    axis.title.x = element_text(color="black", 
+    size=12),
+    axis.title.y = element_text(color="black",
+    size=10,
+    face="italic"))+
+  
+  scale_y_continuous(expand = c(0, 0),
+    limits=c(0.0,2000000),
+    breaks=seq(0.0,2000000,250000), 
+    name = "Number of Infected")+
+  
+  scale_x_continuous(expand = c(0, 0),
+    name = "Days")+
+  
+  labs(title = "SIR Model 2019-nCov Number of Infected Colombia", 
+       caption = "Info taken from RamiKrispin. Adapted model from Learning Machines.")
+
+plotinf
+```
+
+
+```{r Grahps!Graphs!Graphs!, echo=FALSE}
+plotrec <- ggplot(fit, aes(x=time,y =R)) +   
+  geom_line(size =1.25,color ="green3")+  
+  
+  theme(
+    plot.title = element_text(size = 12, face = "bold",hjust = 0.5),
+    plot.caption = element_text(size = 8, face = "italic"),
+    panel.grid.minor = element_blank(), 
+    panel.grid.major = element_line(color = "gray50", size = 0.5),
+    panel.grid.major.x = element_blank(),
+    panel.background = element_blank(),
+    line = element_blank(),
+    axis.ticks.length = unit(.15, "cm"),
+    axis.ticks.y = element_blank(),
+    axis.title.x = element_text(color="black", 
+    size=12),
+    axis.title.y = element_text(color="black",
+    size=10,
+    face="italic"))+
+  
+  scale_y_continuous(expand = c(0, 0),
+    limits=c(0.0,25000000),
+    breaks=seq(0.0,25000000,5000000), 
+    name = "Number of recovered")+
+  
+  scale_x_continuous(expand = c(0, 0),
+    name = "Days")+
+  
+  labs(title = "SIR Model 2019-nCov Number of Recovered Colombia", 
+       caption = "Info taken from RamiKrispin. Adapted model from Learning Machines.")
+
+plotrec
+```
+
+
+```{r Grahps!Graphs!Graphs!Graphs!, echo=FALSE}
+plotsuc <- ggplot(fit, aes(x=time,y =S)) +   
+  geom_line(size =1.25,color ="Gray1")+  
+  
+  theme(
+    plot.title = element_text(size = 12, face = "bold",hjust = 0.5),
+    plot.caption = element_text(size = 8, face = "italic"),
+    panel.grid.minor = element_blank(), 
+    panel.grid.major = element_line(color = "gray50", size = 0.5),
+    panel.grid.major.x = element_blank(),
+    panel.background = element_blank(),
+    line = element_blank(),
+    axis.ticks.length = unit(.15, "cm"),
+    axis.ticks.y = element_blank(),
+    axis.title.x = element_text(color="black", 
+    size=12),
+    axis.title.y = element_text(color="black",
+    size=10,
+    face="italic"))+
+  
+  scale_y_continuous(expand = c(0, 0),
+    limits=c(25000000,50000000),
+    breaks=seq(25000000,50000000,10000000), 
+    name = "Number of Susceptibles")+
+  
+  scale_x_continuous(expand = c(0, 0),
+    name = "Days")+
+  
+  labs(title = "SIR Model 2019-nCov Number of Susceptibles Colombia", 
+       caption = "Info taken from RamiKrispin. Adapted model from Learning Machines.")
+
+plotsuc
+
+```
+
+## Final Thoughts
+
+This model is very simple and there is a huge number of other variables that need to be considered, such as density, climate, governments response ... etc. Nevertheless, it was fun to build. Many thanks to RamiKrispin for the data and to Learning Machine for the tutorial. 
